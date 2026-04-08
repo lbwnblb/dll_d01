@@ -1,9 +1,7 @@
-﻿# CMakeList.txt: dll_d01 的 CMake 项目，在此处包括源代码并定义
-# 项目特定的逻辑。
-#
+﻿# CMakeList.txt: dll_d01 的 CMake 项目，构建为 DLL 动态链接库。
 
-# 将源代码添加到此项目的可执行文件。
-add_executable (dll_d01 "dll_d01.cpp" "dll_d01.h")
+# 将源代码添加到此项目的动态链接库。
+add_library(dll_d01 SHARED "dll_d01.cpp" "dll_d01.h")
 
 if (CMAKE_VERSION VERSION_GREATER 3.12)
   set_property(TARGET dll_d01 PROPERTY CXX_STANDARD 20)
