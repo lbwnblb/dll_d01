@@ -3,9 +3,12 @@
 #include <windows.h>
 #include "dll_d02_ali.h"
 void messageBoxHello() {
-    MessageBox(NULL, TEXT("Hello World!"), TEXT("DLL_PROCESS_ATTACH"), MB_OK | MB_ICONINFORMATION);
+    MessageBox(NULL, TEXT("Hello"), TEXT("Test"), MB_OK | MB_ICONINFORMATION | MB_SYSTEMMODAL);
 }
-
+DWORD WINAPI ShowMsg(LPVOID) {
+    MessageBox(NULL, TEXT("Hello!"), TEXT("Injected"), MB_OK | MB_SYSTEMMODAL);
+    return 0;
+}
 void messageBoxGoodbye() {
     MessageBox(NULL, TEXT("Goodbye World!"), TEXT("DLL_PROCESS_DETACH"), MB_OK | MB_ICONINFORMATION);
 }
@@ -22,7 +25,7 @@ BOOL APIENTRY DllMain(
     case DLL_PROCESS_ATTACH:
     {   // ← 加花括号，否则编译报错
 
-        messageBoxHello();
+        //CreateThread(NULL, 0, ShowMsg, NULL, 0, NULL);
         break;
     }
     case DLL_THREAD_ATTACH:
