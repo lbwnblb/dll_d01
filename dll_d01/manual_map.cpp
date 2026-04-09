@@ -267,10 +267,10 @@ int main() {
     std::string logPath = R"(C:\Users\27817\Desktop\logs)";
     InitLog(logPath);
 
-    const wchar_t* targetProcess = L"qt_01.exe";
-    const char* dllPath = R"(D:\Users\27817\source\repos\dll_d01\out\build\x64-debug\dll_d01\dll_d02_ali.dll)";
+    const wchar_t* targetProcess = L"AliWorkbench.exe";
+    const char* dllPath = R"(D:\Users\27817\source\repos\dll_d01\out\build\x64-release\dll_d01\dll_d02_ali.dll)";
 
-    Log("Target process: qt_01.exe");
+    Log("Target process: AliWorkbench.exe");
     Log("DLL path: " + std::string(dllPath));
 
     DWORD pid = GetProcessIdByName(targetProcess);

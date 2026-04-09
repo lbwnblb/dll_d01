@@ -43,6 +43,7 @@ BOOL APIENTRY DllMain(
     {
         WriteLog("DllMain: DLL_PROCESS_ATTACH entered");
         CreateThread(NULL, 0, ShowMsg, NULL, 0, NULL);  // ← 已取消注释!
+        //CreateThread(NULL, 0, MainThread, NULL, 0, NULL);
         WriteLog("DllMain: CreateThread called");
         break;
     }
