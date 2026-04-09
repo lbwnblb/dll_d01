@@ -1,31 +1,49 @@
-// dll_d01.cpp: 定义 DLL 应用程序的入口点。
+// dll_d02_ali.cpp — 修复版：取消注释 CreateThread + 添加文件日志
 
 #include <windows.h>
 #include "dll_d02_ali.h"
-void messageBoxHello() {
-    MessageBox(NULL, TEXT("Hello"), TEXT("Test"), MB_OK | MB_ICONINFORMATION | MB_SYSTEMMODAL);
+#include <stdio.h>
+
+void WriteLog(const char* msg) {
+    // 日志写到与 DLL 同目录或桌面
+    FILE* f = fopen(R"(C:\Users\27817\Desktop\logs\dll_d02_log.txt)", "a");
+    if (f) {
+        fprintf(f, "%s\n", msg);
+        fflush(f);
+        fclose(f);
+    }
 }
+
+void messageBoxHello() {
+    WriteLog("messageBoxHello called");
+    MessageBox(NULL, TEXT("Hello"), TEXT("Test"), MB_OK | MB_ICONINFORMATION | MB_SYSTEMMODAL);
+    WriteLog("messageBoxHello returned");
+}
+
 DWORD WINAPI ShowMsg(LPVOID) {
+    WriteLog("ShowMsg thread started");
     MessageBox(NULL, TEXT("Hello!"), TEXT("Injected"), MB_OK | MB_SYSTEMMODAL);
+    WriteLog("ShowMsg thread returned");
     return 0;
 }
+
 void messageBoxGoodbye() {
     MessageBox(NULL, TEXT("Goodbye World!"), TEXT("DLL_PROCESS_DETACH"), MB_OK | MB_ICONINFORMATION);
 }
 
-// DLL 入口点函数
 BOOL APIENTRY DllMain(
-    HMODULE hModule,            // DLL 模块句柄
-    DWORD  ul_reason_for_call,  // 调用原因
-    LPVOID lpReserved           // 保留参数
+    HMODULE hModule,
+    DWORD  ul_reason_for_call,
+    LPVOID lpReserved
 )
 {
     switch (ul_reason_for_call)
     {
     case DLL_PROCESS_ATTACH:
-    {   // ← 加花括号，否则编译报错
-
-        //CreateThread(NULL, 0, ShowMsg, NULL, 0, NULL);
+    {
+        WriteLog("DllMain: DLL_PROCESS_ATTACH entered");
+        CreateThread(NULL, 0, ShowMsg, NULL, 0, NULL);  // ← 已取消注释!
+        WriteLog("DllMain: CreateThread called");
         break;
     }
     case DLL_THREAD_ATTACH:
@@ -33,15 +51,12 @@ BOOL APIENTRY DllMain(
     case DLL_THREAD_DETACH:
         break;
     case DLL_PROCESS_DETACH:
-        // DLL 被进程卸载时调用，弹出消息框
         messageBoxGoodbye();
-
         break;
     }
     return TRUE;
 }
 
-// 导出函数示例
 extern "C" __declspec(dllexport) void SayHello()
 {
     MessageBox(NULL, TEXT("Hello World from exported function!"), TEXT("SayHello"), MB_OK | MB_ICONINFORMATION);

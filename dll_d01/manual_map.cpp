@@ -3,8 +3,39 @@
 #include <fstream>
 #include <vector>
 #include <TlHelp32.h>
+#include <sstream>
+#include <ctime>
 
-// ========== 数据结构 ==========
+// ========== Logger ==========
+static std::ofstream g_log;
+
+void InitLog(const std::string& logDir) {
+    CreateDirectoryA(logDir.c_str(), NULL);
+    std::string logFile = logDir + "\\manual_map_log.txt";
+    g_log.open(logFile, std::ios::out | std::ios::trunc);
+    if (g_log.is_open()) {
+        time_t now = time(nullptr);
+        char buf[64];
+        ctime_s(buf, sizeof(buf), &now);
+        g_log << "=== Manual Map Log Started: " << buf << "===" << std::endl;
+    }
+}
+
+void Log(const std::string& msg) {
+    if (g_log.is_open()) {
+        g_log << "[LOG] " << msg << std::endl;
+        g_log.flush();
+    }
+    std::cout << "[LOG] " << msg << "\n";
+}
+
+void LogHex(const std::string& label, DWORD64 val) {
+    std::ostringstream ss;
+    ss << label << ": 0x" << std::hex << val;
+    Log(ss.str());
+}
+
+// ========== Data ==========
 struct MANUAL_MAP_DATA {
     HMODULE(WINAPI* pLoadLibraryA)(LPCSTR);
     FARPROC(WINAPI* pGetProcAddress)(HMODULE, LPCSTR);
@@ -12,8 +43,7 @@ struct MANUAL_MAP_DATA {
     LPVOID pBase;
 };
 
-// ========== Shellcode：在目标进程内执行 ==========
-// 这个函数会被复制到目标进程中运行
+// ========== Shellcode ==========
 void __stdcall Shellcode(MANUAL_MAP_DATA* pData) {
     if (!pData) return;
 
@@ -22,7 +52,7 @@ void __stdcall Shellcode(MANUAL_MAP_DATA* pData) {
     auto* pNtHeaders = (PIMAGE_NT_HEADERS)(pBase + pDosHeader->e_lfanew);
     auto* pOptHeader = &pNtHeaders->OptionalHeader;
 
-    // 1. 处理重定位
+    // 1. Relocation
     DWORD64 delta = (DWORD64)pBase - pOptHeader->ImageBase;
     if (delta) {
         auto* pRelocDir = &pOptHeader->DataDirectory[IMAGE_DIRECTORY_ENTRY_BASERELOC];
@@ -42,7 +72,7 @@ void __stdcall Shellcode(MANUAL_MAP_DATA* pData) {
         }
     }
 
-    // 2. 处理导入表
+    // 2. Import table
     auto* pImportDir = &pOptHeader->DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT];
     if (pImportDir->Size) {
         auto* pImport = (PIMAGE_IMPORT_DESCRIPTOR)(pBase + pImportDir->VirtualAddress);
@@ -69,17 +99,16 @@ void __stdcall Shellcode(MANUAL_MAP_DATA* pData) {
         }
     }
 
-    // 3. 调用 DllMain
+    // 3. Call DllMain
     if (pOptHeader->AddressOfEntryPoint) {
         pData->pDllMain = (BOOL(WINAPI*)(HINSTANCE, DWORD, LPVOID))
             (pBase + pOptHeader->AddressOfEntryPoint);
         pData->pDllMain((HINSTANCE)pBase, DLL_PROCESS_ATTACH, NULL);
     }
 }
-// 用来计算 Shellcode 函数大小的标记
 void ShellcodeEnd() {}
 
-// ========== 辅助函数 ==========
+// ========== Helper ==========
 DWORD GetProcessIdByName(const wchar_t* name) {
     HANDLE hSnap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
     PROCESSENTRY32W pe = { sizeof(pe) };
@@ -95,12 +124,12 @@ DWORD GetProcessIdByName(const wchar_t* name) {
     return 0;
 }
 
-// ========== 主函数：Manual Map 注入 ==========
+// ========== ManualMap ==========
 bool ManualMap(HANDLE hProcess, const char* dllPath) {
-    // 读取 DLL 文件
+    Log("Reading DLL: " + std::string(dllPath));
     std::ifstream file(dllPath, std::ios::binary | std::ios::ate);
     if (!file) {
-        std::cout << "无法打开 DLL 文件\n";
+        Log("[FAIL] Cannot open DLL file! Check if path exists.");
         return false;
     }
     size_t fileSize = file.tellg();
@@ -108,107 +137,160 @@ bool ManualMap(HANDLE hProcess, const char* dllPath) {
     std::vector<BYTE> rawDll(fileSize);
     file.read((char*)rawDll.data(), fileSize);
     file.close();
+    Log("DLL file size: " + std::to_string(fileSize) + " bytes");
 
-    // 解析 PE 头
     auto* pDosHeader = (PIMAGE_DOS_HEADER)rawDll.data();
     if (pDosHeader->e_magic != IMAGE_DOS_SIGNATURE) {
-        std::cout << "无效的 PE 文件\n";
+        Log("[FAIL] Invalid PE file (bad DOS signature)");
         return false;
     }
     auto* pNtHeaders = (PIMAGE_NT_HEADERS)(rawDll.data() + pDosHeader->e_lfanew);
     if (pNtHeaders->Signature != IMAGE_NT_SIGNATURE) {
-        std::cout << "无效的 NT 签名\n";
+        Log("[FAIL] Invalid NT signature");
         return false;
     }
 
-    // 在目标进程分配内存
+    Log("PE Machine: 0x" + ([&] { std::ostringstream s; s << std::hex << pNtHeaders->FileHeader.Machine; return s.str(); })());
+    Log("SizeOfImage: " + std::to_string(pNtHeaders->OptionalHeader.SizeOfImage));
+    Log("AddressOfEntryPoint: 0x" + ([&] { std::ostringstream s; s << std::hex << pNtHeaders->OptionalHeader.AddressOfEntryPoint; return s.str(); })());
+    Log("NumberOfSections: " + std::to_string(pNtHeaders->FileHeader.NumberOfSections));
+
+    if (pNtHeaders->OptionalHeader.AddressOfEntryPoint == 0) {
+        Log("[WARN] AddressOfEntryPoint is 0 -- DllMain will NOT be called!");
+    }
+
     LPVOID pTargetBase = VirtualAllocEx(hProcess, NULL,
         pNtHeaders->OptionalHeader.SizeOfImage,
         MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
     if (!pTargetBase) {
-        std::cout << "VirtualAllocEx 失败\n";
+        Log("[FAIL] VirtualAllocEx failed, GetLastError=" + std::to_string(GetLastError()));
         return false;
     }
-    std::cout << "目标进程分配地址: 0x" << std::hex << pTargetBase << "\n";
+    LogHex("Target base allocated at", (DWORD64)pTargetBase);
 
-    // 写入 PE 头
-    WriteProcessMemory(hProcess, pTargetBase, rawDll.data(),
+    BOOL ret = WriteProcessMemory(hProcess, pTargetBase, rawDll.data(),
         pNtHeaders->OptionalHeader.SizeOfHeaders, NULL);
+    Log("Write PE headers: " + std::string(ret ? "OK" : "FAILED"));
 
-    // 写入各节区
     auto* pSection = IMAGE_FIRST_SECTION(pNtHeaders);
     for (WORD i = 0; i < pNtHeaders->FileHeader.NumberOfSections; i++) {
         if (pSection[i].SizeOfRawData) {
-            WriteProcessMemory(hProcess,
+            ret = WriteProcessMemory(hProcess,
                 (BYTE*)pTargetBase + pSection[i].VirtualAddress,
                 rawDll.data() + pSection[i].PointerToRawData,
                 pSection[i].SizeOfRawData, NULL);
+            Log("Write section " + std::string((char*)pSection[i].Name, 8) +
+                " VA=0x" + ([&] { std::ostringstream s; s << std::hex << pSection[i].VirtualAddress; return s.str(); })() +
+                " Size=" + std::to_string(pSection[i].SizeOfRawData) +
+                (ret ? " OK" : " FAILED"));
         }
     }
 
-    // 准备注入数据
     MANUAL_MAP_DATA mapData = {};
     mapData.pLoadLibraryA = LoadLibraryA;
     mapData.pGetProcAddress = GetProcAddress;
     mapData.pBase = pTargetBase;
 
-    // 写入 mapData
+    LogHex("pLoadLibraryA", (DWORD64)mapData.pLoadLibraryA);
+    LogHex("pGetProcAddress", (DWORD64)mapData.pGetProcAddress);
+
     LPVOID pMapData = VirtualAllocEx(hProcess, NULL, sizeof(mapData),
         MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+    if (!pMapData) {
+        Log("[FAIL] VirtualAllocEx for mapData failed");
+        return false;
+    }
     WriteProcessMemory(hProcess, pMapData, &mapData, sizeof(mapData), NULL);
+    LogHex("pMapData at", (DWORD64)pMapData);
 
-    // 写入 Shellcode
     size_t shellcodeSize = (DWORD64)ShellcodeEnd - (DWORD64)Shellcode;
-    LPVOID pShellcode = VirtualAllocEx(hProcess, NULL, shellcodeSize,
-        MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
-    WriteProcessMemory(hProcess, pShellcode, (void*)Shellcode, shellcodeSize, NULL);
+    Log("Shellcode size: " + std::to_string(shellcodeSize) + " bytes");
 
-    // 创建远程线程执行 Shellcode
-    HANDLE hThread = CreateRemoteThread(hProcess, NULL, 0,
-        (LPTHREAD_START_ROUTINE)pShellcode, pMapData, 0, NULL);
-    if (!hThread) {
-        std::cout << "CreateRemoteThread 失败\n";
+    if (shellcodeSize == 0 || shellcodeSize > 0x10000) {
+        Log("[FAIL] Shellcode size abnormal! Compiler may have reordered functions.");
+        Log("  Shellcode addr: 0x" + ([&] { std::ostringstream s; s << std::hex << (DWORD64)Shellcode; return s.str(); })());
+        Log("  ShellcodeEnd addr: 0x" + ([&] { std::ostringstream s; s << std::hex << (DWORD64)ShellcodeEnd; return s.str(); })());
         return false;
     }
 
-    // 等待执行完成
-    WaitForSingleObject(hThread, INFINITE);
+    LPVOID pShellcode = VirtualAllocEx(hProcess, NULL, shellcodeSize,
+        MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+    if (!pShellcode) {
+        Log("[FAIL] VirtualAllocEx for shellcode failed");
+        return false;
+    }
+    WriteProcessMemory(hProcess, pShellcode, (void*)Shellcode, shellcodeSize, NULL);
+    LogHex("pShellcode at", (DWORD64)pShellcode);
+
+    Log("Creating remote thread...");
+    HANDLE hThread = CreateRemoteThread(hProcess, NULL, 0,
+        (LPTHREAD_START_ROUTINE)pShellcode, pMapData, 0, NULL);
+    if (!hThread) {
+        Log("[FAIL] CreateRemoteThread failed, GetLastError=" + std::to_string(GetLastError()));
+        return false;
+    }
+    Log("Remote thread created, waiting...");
+
+    DWORD waitResult = WaitForSingleObject(hThread, 10000);
+    if (waitResult == WAIT_TIMEOUT) {
+        Log("[WARN] Remote thread timed out (10s)!");
+    }
+    else if (waitResult == WAIT_OBJECT_0) {
+        DWORD exitCode = 0;
+        GetExitCodeThread(hThread, &exitCode);
+        Log("Remote thread finished, exitCode=" + std::to_string(exitCode));
+    }
+    else {
+        Log("[WARN] WaitForSingleObject unexpected: " + std::to_string(waitResult));
+    }
     CloseHandle(hThread);
 
-    // 清理 shellcode 和 mapData（可选）
+    // Read back to check if shellcode set pDllMain
+    MANUAL_MAP_DATA remoteData = {};
+    ReadProcessMemory(hProcess, pMapData, &remoteData, sizeof(remoteData), NULL);
+    LogHex("Remote pDllMain (written by shellcode)", (DWORD64)remoteData.pDllMain);
+    if (remoteData.pDllMain == nullptr) {
+        Log("[WARN] pDllMain is NULL -- shellcode likely crashed or did not run!");
+    }
+    else {
+        Log("[OK] pDllMain was set -- DllMain should have been called");
+    }
+
     VirtualFreeEx(hProcess, pShellcode, 0, MEM_RELEASE);
     VirtualFreeEx(hProcess, pMapData, 0, MEM_RELEASE);
 
-    // 可选：擦除 PE 头，防止内存扫描
-    BYTE zeros[0x1000] = {};
-    WriteProcessMemory(hProcess, pTargetBase, zeros,
-        pNtHeaders->OptionalHeader.SizeOfHeaders, NULL);
-
-    std::cout << "Manual Map 注入成功！\n";
+    Log("=== ManualMap injection flow complete ===");
     return true;
 }
 
 int main() {
-	std::string logPath = "C:\Users\27817\Desktop\logs";
+    std::string logPath = R"(C:\Users\27817\Desktop\logs)";
+    InitLog(logPath);
 
-    const wchar_t* targetProcess = L"qt_01.exe";  // ← 改成目标进程名
-    const char* dllPath = "D:\\Users\\27817\\source\\repos\\dll_d01\\out\\build\\x64-release\\dll_d02.dll";             // ← 改成你的 DLL 路径
+    const wchar_t* targetProcess = L"qt_01.exe";
+    const char* dllPath = R"(D:\Users\27817\source\repos\dll_d01\out\build\x64-debug\dll_d01\dll_d02_ali.dll)";
+
+    Log("Target process: qt_01.exe");
+    Log("DLL path: " + std::string(dllPath));
 
     DWORD pid = GetProcessIdByName(targetProcess);
     if (!pid) {
-        std::cout << "找不到目标进程\n";
+        Log("[FAIL] Target process not found!");
         return 1;
     }
-    std::cout << "目标 PID: " << pid << "\n";
+    Log("Target PID: " + std::to_string(pid));
 
     HANDLE hProcess = OpenProcess(PROCESS_ALL_ACCESS, FALSE, pid);
     if (!hProcess) {
-        std::cout << "OpenProcess 失败\n";
+        Log("[FAIL] OpenProcess failed, GetLastError=" + std::to_string(GetLastError()));
         return 1;
     }
+    Log("OpenProcess OK");
 
     ManualMap(hProcess, dllPath);
 
     CloseHandle(hProcess);
+    Log("Done");
+    g_log.close();
     return 0;
 }
