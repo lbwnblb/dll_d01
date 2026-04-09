@@ -189,8 +189,10 @@ bool ManualMap(HANDLE hProcess, const char* dllPath) {
 }
 
 int main() {
-    const wchar_t* targetProcess = L"target.exe";  // ← 改成目标进程名
-    const char* dllPath = "my_dll.dll";             // ← 改成你的 DLL 路径
+	std::string logPath = "C:\Users\27817\Desktop\logs";
+
+    const wchar_t* targetProcess = L"qt_01.exe";  // ← 改成目标进程名
+    const char* dllPath = "D:\\Users\\27817\\source\\repos\\dll_d01\\out\\build\\x64-release\\dll_d02.dll";             // ← 改成你的 DLL 路径
 
     DWORD pid = GetProcessIdByName(targetProcess);
     if (!pid) {
