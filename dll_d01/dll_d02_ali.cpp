@@ -1,12 +1,20 @@
 // dll_d02_ali.cpp — 修复版：取消注释 CreateThread + 添加文件日志
 
 #include <windows.h>
+#include <shlobj.h>
 #include "dll_d02_ali.h"
 #include <stdio.h>
+#include <string>
 
 void WriteLog(const char* msg) {
-    // 日志写到与 DLL 同目录或桌面
-    FILE* f = fopen(R"(C:\Users\27817\Desktop\logs\dll_d02_log.txt)", "a");
+    // 动态获取桌面路径
+    char desktopPath[MAX_PATH];
+    if (FAILED(SHGetFolderPathA(NULL, CSIDL_DESKTOPDIRECTORY, NULL, 0, desktopPath)))
+        return;
+    std::string logDir = std::string(desktopPath) + "\\logs";
+    CreateDirectoryA(logDir.c_str(), NULL);
+    std::string logFile = logDir + "\\dll_d02_log.txt";
+    FILE* f = fopen(logFile.c_str(), "a");
     if (f) {
         fprintf(f, "%s\n", msg);
         fflush(f);

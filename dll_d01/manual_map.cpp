@@ -5,6 +5,7 @@
 #include <TlHelp32.h>
 #include <sstream>
 #include <ctime>
+#include <shlobj.h>
 
 // ========== Logger ==========
 static std::ofstream g_log;
@@ -264,11 +265,28 @@ bool ManualMap(HANDLE hProcess, const char* dllPath) {
 }
 
 int main() {
-    std::string logPath = R"(C:\Users\27817\Desktop\logs)";
+    // 动态获取桌面路径
+    char desktopPath[MAX_PATH];
+    if (FAILED(SHGetFolderPathA(NULL, CSIDL_DESKTOPDIRECTORY, NULL, 0, desktopPath))) {
+        std::cerr << "Failed to get desktop path!" << std::endl;
+        return 1;
+    }
+    std::string logPath = std::string(desktopPath) + "\\logs";
     InitLog(logPath);
 
+    // 动态获取用户目录来拼接 DLL 路径
+    char userProfile[MAX_PATH];
+    if (FAILED(SHGetFolderPathA(NULL, CSIDL_PROFILE, NULL, 0, userProfile))) {
+        Log("[FAIL] Failed to get user profile path!");
+        return 1;
+    }
+    std::string dllPathStr = std::string(userProfile);
+    // 将 C:\Users\xxx 转为 D:\Users\xxx（如果你的源码在D盘）
+    dllPathStr[0] = 'D';
+    dllPathStr += R"(\source\repos\dll_d01\out\build\x64-release\dll_d01\dll_d02_ali.dll)";
+
     const wchar_t* targetProcess = L"AliWorkbench.exe";
-    const char* dllPath = R"(D:\Users\27817\source\repos\dll_d01\out\build\x64-release\dll_d01\dll_d02_ali.dll)";
+    const char* dllPath = dllPathStr.c_str();
 
     Log("Target process: AliWorkbench.exe");
     Log("DLL path: " + std::string(dllPath));
