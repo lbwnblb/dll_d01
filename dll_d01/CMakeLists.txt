@@ -4,6 +4,8 @@
 add_library(dll_d01 SHARED "dll_d01.cpp" "dll_d01.h")
 add_library(dll_d02_ali SHARED "dll_d02_ali.cpp" "dll_d02_ali.h")
 add_executable(manual_map "manual_map.cpp")
+target_compile_options(manual_map PRIVATE /GS- /GL- /Gy)
+target_link_options(manual_map PRIVATE /INCREMENTAL:NO)
 if (CMAKE_VERSION VERSION_GREATER 3.12)
   set_property(TARGET dll_d01 PROPERTY CXX_STANDARD 20)
 endif()

@@ -40,25 +40,30 @@ void LogHex(const std::string& label, DWORD64 val) {
 struct MANUAL_MAP_DATA {
     HMODULE(WINAPI* pLoadLibraryA)(LPCSTR);
     FARPROC(WINAPI* pGetProcAddress)(HMODULE, LPCSTR);
+    BOOL(WINAPI* pRtlAddFunctionTable)(PRUNTIME_FUNCTION, DWORD, DWORD64);
     BOOL(WINAPI* pDllMain)(HINSTANCE, DWORD, LPVOID);
     LPVOID pBase;
 };
 
 // ========== Shellcode ==========
+#pragma runtime_checks("", off)
+#pragma optimize("ts", on)
+#pragma strict_gs_check(push, off)
+#pragma check_stack(off)
 void __stdcall Shellcode(MANUAL_MAP_DATA* pData) {
     if (!pData) return;
 
     BYTE* pBase = (BYTE*)pData->pBase;
-    auto* pDosHeader = (PIMAGE_DOS_HEADER)pBase;
-    auto* pNtHeaders = (PIMAGE_NT_HEADERS)(pBase + pDosHeader->e_lfanew);
-    auto* pOptHeader = &pNtHeaders->OptionalHeader;
+    PIMAGE_DOS_HEADER pDosHeader = (PIMAGE_DOS_HEADER)pBase;
+    PIMAGE_NT_HEADERS pNtHeaders = (PIMAGE_NT_HEADERS)(pBase + pDosHeader->e_lfanew);
+    PIMAGE_OPTIONAL_HEADER pOptHeader = &pNtHeaders->OptionalHeader;
 
     // 1. Relocation
     DWORD64 delta = (DWORD64)pBase - pOptHeader->ImageBase;
     if (delta) {
-        auto* pRelocDir = &pOptHeader->DataDirectory[IMAGE_DIRECTORY_ENTRY_BASERELOC];
+        PIMAGE_DATA_DIRECTORY pRelocDir = &pOptHeader->DataDirectory[IMAGE_DIRECTORY_ENTRY_BASERELOC];
         if (pRelocDir->Size) {
-            auto* pReloc = (PIMAGE_BASE_RELOCATION)(pBase + pRelocDir->VirtualAddress);
+            PIMAGE_BASE_RELOCATION pReloc = (PIMAGE_BASE_RELOCATION)(pBase + pRelocDir->VirtualAddress);
             while (pReloc->VirtualAddress) {
                 DWORD numEntries = (pReloc->SizeOfBlock - sizeof(IMAGE_BASE_RELOCATION)) / sizeof(WORD);
                 WORD* pEntry = (WORD*)(pReloc + 1);
@@ -74,15 +79,15 @@ void __stdcall Shellcode(MANUAL_MAP_DATA* pData) {
     }
 
     // 2. Import table
-    auto* pImportDir = &pOptHeader->DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT];
+    PIMAGE_DATA_DIRECTORY pImportDir = &pOptHeader->DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT];
     if (pImportDir->Size) {
-        auto* pImport = (PIMAGE_IMPORT_DESCRIPTOR)(pBase + pImportDir->VirtualAddress);
+        PIMAGE_IMPORT_DESCRIPTOR pImport = (PIMAGE_IMPORT_DESCRIPTOR)(pBase + pImportDir->VirtualAddress);
         while (pImport->Name) {
             char* szMod = (char*)(pBase + pImport->Name);
             HMODULE hMod = pData->pLoadLibraryA(szMod);
 
-            auto* pThunk = (PIMAGE_THUNK_DATA)(pBase + pImport->OriginalFirstThunk);
-            auto* pFunc = (PIMAGE_THUNK_DATA)(pBase + pImport->FirstThunk);
+            PIMAGE_THUNK_DATA pThunk = (PIMAGE_THUNK_DATA)(pBase + pImport->OriginalFirstThunk);
+            PIMAGE_THUNK_DATA pFunc = (PIMAGE_THUNK_DATA)(pBase + pImport->FirstThunk);
 
             while (pThunk->u1.AddressOfData) {
                 if (IMAGE_SNAP_BY_ORDINAL(pThunk->u1.Ordinal)) {
@@ -90,7 +95,7 @@ void __stdcall Shellcode(MANUAL_MAP_DATA* pData) {
                         hMod, (LPCSTR)IMAGE_ORDINAL(pThunk->u1.Ordinal));
                 }
                 else {
-                    auto* pImportByName = (PIMAGE_IMPORT_BY_NAME)(pBase + pThunk->u1.AddressOfData);
+                    PIMAGE_IMPORT_BY_NAME pImportByName = (PIMAGE_IMPORT_BY_NAME)(pBase + pThunk->u1.AddressOfData);
                     pFunc->u1.Function = (ULONGLONG)pData->pGetProcAddress(hMod, pImportByName->Name);
                 }
                 pThunk++;
@@ -100,13 +105,39 @@ void __stdcall Shellcode(MANUAL_MAP_DATA* pData) {
         }
     }
 
-    // 3. Call DllMain
+    // 3. 注册异常处理表 (x64 必须)
+    PIMAGE_DATA_DIRECTORY pExceptDir = &pOptHeader->DataDirectory[IMAGE_DIRECTORY_ENTRY_EXCEPTION];
+    if (pExceptDir->Size) {
+        pData->pRtlAddFunctionTable(
+            (PRUNTIME_FUNCTION)(pBase + pExceptDir->VirtualAddress),
+            pExceptDir->Size / sizeof(RUNTIME_FUNCTION),
+            (DWORD64)pBase
+        );
+    }
+
+    // 4. TLS 回调
+    PIMAGE_DATA_DIRECTORY pTlsDir = &pOptHeader->DataDirectory[IMAGE_DIRECTORY_ENTRY_TLS];
+    if (pTlsDir->Size) {
+        PIMAGE_TLS_DIRECTORY pTls = (PIMAGE_TLS_DIRECTORY)(pBase + pTlsDir->VirtualAddress);
+        PIMAGE_TLS_CALLBACK* ppCallback = (PIMAGE_TLS_CALLBACK*)pTls->AddressOfCallBacks;
+        if (ppCallback) {
+            while (*ppCallback) {
+                (*ppCallback)((PVOID)pBase, DLL_PROCESS_ATTACH, NULL);
+                ppCallback++;
+            }
+        }
+    }
+
+    // 4. Call DllMain
     if (pOptHeader->AddressOfEntryPoint) {
         pData->pDllMain = (BOOL(WINAPI*)(HINSTANCE, DWORD, LPVOID))
             (pBase + pOptHeader->AddressOfEntryPoint);
         pData->pDllMain((HINSTANCE)pBase, DLL_PROCESS_ATTACH, NULL);
     }
 }
+#pragma strict_gs_check(pop)
+#pragma runtime_checks("", restore)
+#pragma optimize("", on)
 void ShellcodeEnd() {}
 
 // ========== Helper ==========
@@ -190,6 +221,8 @@ bool ManualMap(HANDLE hProcess, const char* dllPath) {
     MANUAL_MAP_DATA mapData = {};
     mapData.pLoadLibraryA = LoadLibraryA;
     mapData.pGetProcAddress = GetProcAddress;
+    mapData.pRtlAddFunctionTable = (BOOL(WINAPI*)(PRUNTIME_FUNCTION, DWORD, DWORD64))
+        GetProcAddress(GetModuleHandleA("kernel32.dll"), "RtlAddFunctionTable");
     mapData.pBase = pTargetBase;
 
     LogHex("pLoadLibraryA", (DWORD64)mapData.pLoadLibraryA);
@@ -281,14 +314,13 @@ int main() {
         return 1;
     }
     std::string dllPathStr = std::string(userProfile);
-    // 将 C:\Users\xxx 转为 D:\Users\xxx（如果你的源码在D盘）
-    dllPathStr[0] = 'D';
-    dllPathStr += R"(\source\repos\dll_d01\out\build\x64-release\dll_d01\dll_d02_ali.dll)";
 
-    const wchar_t* targetProcess = L"AliWorkbench.exe";
+    dllPathStr += R"(\dll_d01\out\build\x64-release\dll_d01\dll_d02_ali.dll)";
+
+    const wchar_t* targetProcess = L"qt_01.exe";
     const char* dllPath = dllPathStr.c_str();
 
-    Log("Target process: AliWorkbench.exe");
+    Log("Target process: qt_01.exe");
     Log("DLL path: " + std::string(dllPath));
 
     DWORD pid = GetProcessIdByName(targetProcess);
