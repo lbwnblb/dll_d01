@@ -29,9 +29,9 @@ void messageBoxHello() {
 }
 
 DWORD WINAPI ShowMsg(LPVOID) {
-    WriteLog("ShowMsg thread started");
+    //WriteLog("ShowMsg thread started");
     MessageBox(NULL, TEXT("Hello!"), TEXT("Injected"), MB_OK | MB_SYSTEMMODAL);
-    WriteLog("ShowMsg thread returned");
+    //WriteLog("ShowMsg thread returned");
     return 0;
 }
 
@@ -49,10 +49,11 @@ BOOL APIENTRY DllMain(
     {
     case DLL_PROCESS_ATTACH:
     {
-        WriteLog("DllMain: DLL_PROCESS_ATTACH entered");
-        CreateThread(NULL, 0, ShowMsg, NULL, 0, NULL);  // ← 已取消注释!
+        //WriteLog("DllMain: DLL_PROCESS_ATTACH entered");
+        //CreateThread(NULL, 0, ShowMsg, NULL, 0, NULL);  // ← 已取消注释!
         //CreateThread(NULL, 0, MainThread, NULL, 0, NULL);
-        WriteLog("DllMain: CreateThread called");
+        //WriteLog("DllMain: CreateThread called");
+        MessageBox(NULL, TEXT("Hello!"), TEXT("Injected"), MB_OK | MB_SYSTEMMODAL);
         break;
     }
     case DLL_THREAD_ATTACH:
